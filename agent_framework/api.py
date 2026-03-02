@@ -5,7 +5,9 @@ from .agent import Agent
 from .config import settings
 import uuid
 import time
-import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -22,11 +24,12 @@ class ChatResponse(BaseModel):
 
     id: str
     response: str
-    logs: List[Dict[str, Any]]
-    usage: Dict[str, Any]
     iterations: int
+    tool_calls: List[Dict[str, Any]]  # Detailed tool call information
+    usage: Dict[str, Any]
     processing_time: float
     error: Optional[str] = None
+    system_prompt_used: bool = True  # Confirmation that system prompt was sent
 
 
 app = FastAPI(
@@ -34,61 +37,6 @@ app = FastAPI(
     description="Agent framework with tool calling capabilities using vLLM and Qwen3",
     version="0.1.0",
 )
-
-
-def _serialize_logs(logs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert logs to JSON-serializable format."""
-    serialized = []
-    for log in logs:
-        clean_log = {}
-        for key, value in log.items():
-            if key == "response":
-                # Handle LLM response dict
-                clean_log[key] = {
-                    "content": value.get("content"),
-                    "tool_calls": (
-                        [
-                            {
-                                "id": tc.id if hasattr(tc, "id") else tc.get("id"),
-                                "function": {
-                                    "name": tc.function.name
-                                    if hasattr(tc, "function")
-                                    else tc.get("function", {}).get("name"),
-                                    "arguments": tc.function.arguments
-                                    if hasattr(tc, "function")
-                                    else tc.get("function", {}).get("arguments"),
-                                }
-                                if hasattr(tc, "function")
-                                else tc.get("function"),
-                            }
-                            for tc in value.get("tool_calls", []) or []
-                        ]
-                        if value.get("tool_calls")
-                        else None
-                    ),
-                    "finish_reason": value.get("finish_reason"),
-                    "usage": value.get("usage", {}),
-                }
-            elif key == "tool_call":
-                # Handle tool call dict
-                clean_log[key] = {
-                    "id": value.get("id"),
-                    "name": value.get("name"),
-                    "arguments": value.get("arguments"),
-                }
-            elif key == "result":
-                # Handle tool result dict
-                clean_log[key] = {
-                    "success": value.get("success"),
-                    "stdout": value.get("stdout"),
-                    "stderr": value.get("stderr"),
-                    "returncode": value.get("returncode"),
-                    "error": value.get("error"),
-                }
-            else:
-                clean_log[key] = value
-        serialized.append(clean_log)
-    return serialized
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -99,13 +47,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
     The agent will:
     1. Analyze the request
     2. Call tools (bash/python) as needed
-    3. Return final response with execution logs
+    3. Return final response with complete execution details
 
     Args:
         request: Chat request with message and max iterations
 
     Returns:
-        Chat response with result and logs
+        Chat response with:
+        - response: Final answer
+        - tool_calls: Complete list of all tool calls with arguments and results
+        - iterations: Number of reasoning steps
+        - execution details for verification
     """
     session_id = str(uuid.uuid4())
     start_time = time.time()
@@ -114,20 +66,19 @@ async def chat(request: ChatRequest) -> ChatResponse:
         agent = Agent(max_iterations=request.max_iterations)
         result = agent.run(request.message)
 
-        # Serialize logs to ensure JSON compatibility
-        serialized_logs = _serialize_logs(result["logs"])
-
         return ChatResponse(
             id=session_id,
             response=result["response"] or "",
-            logs=serialized_logs,
-            usage=result.get("usage", {}),
             iterations=result["iterations"],
+            tool_calls=result.get("tool_calls_summary", []),
+            usage=result.get("usage", {}),
             processing_time=time.time() - start_time,
             error=result.get("error"),
+            system_prompt_used=result.get("system_prompt_used", True),
         )
 
     except Exception as e:
+        logger.exception("Error in chat endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
 
