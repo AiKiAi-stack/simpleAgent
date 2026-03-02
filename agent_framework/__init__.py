@@ -1,3 +1,3 @@
-"""Qwen3 Agent Framework - Lightweight agent with tool calling."""
+"""Qwen3 Agent Framework - ReAct-based Agent with Tool Support."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
