@@ -1,0 +1,16 @@
+# Core dependencies
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.9.0
+pydantic-settings==2.5.2
+
+# LLM client
+openai==1.52.0
+httpx==0.27.2
+
+# Code execution
+ipython==8.27.0
+executing==2.1.0
+
+# Utilities
+python-dotenv==1.0.1
