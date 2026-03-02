@@ -72,7 +72,8 @@ response = requests.post(
 )
 
 result = response.json()
-print(result["response"])
+print(f"Response: {result['response']}")
+print(f"Tool calls: {result['tool_calls']}")
 ```
 
 ### 安全示例
@@ -110,7 +111,7 @@ cp .env.example .env
 
 ```
 .
-├── agent_framework/
+├── agent_framework/        # 核心框架
 │   ├── agent.py            # Agent 核心（含安全策略）
 │   ├── api.py              # FastAPI 接口
 │   ├── config.py           # 配置管理
@@ -122,10 +123,12 @@ cp .env.example .env
 │       ├── executor.py     # 工具执行器（含安全验证）
 │       ├── schemas.py      # 工具定义
 │       └── __init__.py
-├── examples/
-│   └── basic_usage.py      # 使用示例
-├── tests/
-│   └── test_agent.py       # 单元测试
+├── examples/               # 使用示例
+│   └── basic_usage.py      # 基础使用示例
+├── tests/                  # 测试
+│   ├── __init__.py
+│   ├── test_agent.py       # 单元测试
+│   └── test_security.py    # 安全测试（需要运行中的服务）
 ├── SECURITY.md             # 安全指南
 ├── API_DOCS.md             # API 文档
 ├── requirements.txt
@@ -134,8 +137,20 @@ cp .env.example .env
 
 ## 测试
 
+### 单元测试
+
 ```bash
-pytest test_agent.py -v
+pytest tests/test_agent.py -v
+```
+
+### 安全测试（需要运行中的服务）
+
+```bash
+# 1. 启动服务
+python -m agent_framework.main
+
+# 2. 运行测试
+python tests/test_security.py
 ```
 
 ## 相关文档

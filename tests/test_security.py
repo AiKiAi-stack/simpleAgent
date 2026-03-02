@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Test security validation and tool call transparency.
+Run these tests against a running API server.
 """
 
 import requests
@@ -28,6 +29,7 @@ def test_safe_command():
         print(f"    Args: {tool_call['arguments']}")
         print(f"    Result: success={tool_call['result']['success'] if tool_call['result'] else 'N/A'}")
     
+    assert result.get('system_prompt_used') is True, "System prompt should be used"
     return result
 
 
@@ -44,11 +46,16 @@ def test_dangerous_rm_command():
     print(f"Response: {result['response']}")
     print(f"Tool calls: {len(result.get('tool_calls', []))}")
     
-    for tool_call in result.get('tool_calls', []):
-        if tool_call['result'] and tool_call['result'].get('security_violation'):
-            print(f"  ✅ BLOCKED: {tool_call['result'].get('error', 'Unknown')[:100]}")
-        else:
-            print(f"  ⚠️  Tool executed: {tool_call['name']} - {tool_call['arguments']}")
+    # At least one tool call should have been blocked
+    blocked = any(
+        tc.get('result', {}).get('security_violation', False)
+        for tc in result.get('tool_calls', [])
+    )
+    
+    if blocked:
+        print("  ✅ Dangerous command was blocked")
+    else:
+        print("  ⚠️  Warning: No commands were blocked")
     
     return result
 
@@ -65,11 +72,14 @@ def test_sudo_command():
     
     print(f"Response: {result['response']}")
     
-    for tool_call in result.get('tool_calls', []):
-        if tool_call['result'] and tool_call['result'].get('security_violation'):
-            print(f"  ✅ BLOCKED: {tool_call['result'].get('error', 'Unknown')[:100]}")
-        else:
-            print(f"  ⚠️  Tool executed: {tool_call['name']}")
+    # Check if any tool call was blocked
+    blocked = any(
+        tc.get('result', {}).get('security_violation', False)
+        for tc in result.get('tool_calls', [])
+    )
+    
+    if blocked:
+        print("  ✅ Sudo command was blocked")
     
     return result
 

@@ -1,7 +1,13 @@
 """Test script for Agent Framework."""
 
 import pytest
-from agent_framework.tools.executor import ToolExecutor
+import sys
+from pathlib import Path
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from agent_framework.tools.executor import ToolExecutor, CommandSecurityError
 from agent_framework.tools.schemas import get_tool_schemas
 
 
@@ -70,7 +76,7 @@ class TestToolSchemas:
         """Test bash tool schema structure."""
         schemas = get_tool_schemas()
         bash_schema = schemas[0]
-
+        
         assert bash_schema["type"] == "function"
         assert bash_schema["function"]["name"] == "execute_bash"
         assert "description" in bash_schema["function"]
@@ -81,7 +87,7 @@ class TestToolSchemas:
         """Test Python tool schema structure."""
         schemas = get_tool_schemas()
         python_schema = schemas[1]
-
+        
         assert python_schema["type"] == "function"
         assert python_schema["function"]["name"] == "execute_python"
         assert "description" in python_schema["function"]
