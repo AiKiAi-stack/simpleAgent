@@ -29,18 +29,6 @@ class Agent:
     def run(self, user_message: str) -> Dict[str, Any]:
         """
         Run agent loop until final response or max iterations.
-
-        Args:
-            user_message: User input message to process
-
-        Returns:
-            Dictionary containing complete execution details:
-                - response: Final assistant response
-                - iterations: Number of iterations completed
-                - usage: Token usage statistics
-                - tool_calls_summary: Summary of all tool calls made
-                - execution_log: Detailed log of each step
-                - error: Error message if any
         """
         # Start with system message for security context
         messages = [self.system_message, {"role": "user", "content": user_message}]
@@ -49,17 +37,26 @@ class Agent:
         iteration = 0
 
         logger.info(f"Starting agent run with system message: {self.system_message['content'][:200]}...")
+        logger.info(f"User message: {user_message}")
 
         while iteration < self.max_iterations:
             iteration += 1
-            logger.info(f"Iteration {iteration}: Sending request to vLLM")
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Iteration {iteration}/{self.max_iterations}: Sending request to vLLM")
+            logger.info(f"Messages count: {len(messages)}")
 
             # Get LLM response
             response = self.llm.chat_completion(
                 messages=messages, tools=self.tool_schemas
             )
 
-            logger.info(f"Iteration {iteration}: Got response, tool_calls={response['tool_calls'] is not None}")
+            logger.info(f"Got response from vLLM")
+            logger.info(f"  - Content: {response['content'][:100] if response['content'] else 'None'}...")
+            logger.info(f"  - Tool calls: {response['tool_calls']}")
+            logger.info(f"  - Tool calls type: {type(response['tool_calls'])}")
+            logger.info(f"  - Tool calls is not None: {response['tool_calls'] is not None}")
+            logger.info(f"  - Tool calls bool: {bool(response['tool_calls']) if response['tool_calls'] is not None else 'N/A'}")
+            logger.info(f"  - Finish reason: {response['finish_reason']}")
 
             # Log the response
             execution_log.append({
@@ -70,9 +67,21 @@ class Agent:
                 "finish_reason": response["finish_reason"],
             })
 
-            # Check for tool calls
-            if response["tool_calls"]:
-                for tool_call in response["tool_calls"]:
+            # Check for tool calls - handle both None and empty list
+            has_tool_calls = response["tool_calls"] is not None and len(response["tool_calls"]) > 0
+            logger.info(f"Has tool calls to process: {has_tool_calls}")
+
+            if has_tool_calls:
+                logger.info(f"Processing {len(response['tool_calls'])} tool call(s)...")
+                
+                for idx, tool_call in enumerate(response["tool_calls"]):
+                    logger.info(f"\n  Tool call {idx + 1}/{len(response['tool_calls'])}:")
+                    logger.info(f"    - ID: {tool_call.id}")
+                    logger.info(f"    - Type: {type(tool_call)}")
+                    logger.info(f"    - Function: {tool_call.function}")
+                    logger.info(f"    - Function name: {tool_call.function.name}")
+                    logger.info(f"    - Function arguments: {tool_call.function.arguments}")
+                    
                     tool_call_info = {
                         "step": iteration,
                         "type": "tool_call",
@@ -85,9 +94,14 @@ class Agent:
                     }
 
                     try:
+                        logger.info(f"    - Executing tool: {tool_call.function.name}")
                         result = self._execute_tool(tool_call)
                         tool_call_info["result"] = result
-                        logger.info(f"Tool {tool_call.function.name} executed successfully")
+                        logger.info(f"    - Execution result: success={result.get('success', False)}")
+                        
+                        if result.get('security_violation'):
+                            logger.warning(f"    - Security violation: {result.get('error', 'Unknown')[:100]}")
+                        
                     except CommandSecurityError as e:
                         # Security violation - don't execute, return error
                         tool_call_info["error"] = str(e)
@@ -97,7 +111,14 @@ class Agent:
                             "security_violation": True,
                             "error": str(e),
                         }
-                        logger.warning(f"Security violation blocked: {e}")
+                        logger.warning(f"    - Security violation blocked: {e}")
+                    except Exception as e:
+                        logger.exception(f"    - Execution error: {e}")
+                        tool_call_info["error"] = str(e)
+                        tool_call_info["result"] = {
+                            "success": False,
+                            "error": str(e),
+                        }
 
                     all_tool_calls.append(tool_call_info)
                     execution_log.append(tool_call_info)
@@ -113,19 +134,26 @@ class Agent:
                             "tool_call_id": tool_call.id,
                         }
                     )
+                    logger.info(f"    - Added tool result to messages")
+                
+                logger.info(f"Finished processing all tool calls, continuing to next iteration...")
+                # Continue to next iteration to get LLM response with tool results
             else:
                 # No more tool calls, return final response
-                logger.info(f"Agent completed after {iteration} iterations")
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Agent completed after {iteration} iterations - no more tool calls")
+                logger.info(f"Final response: {response['content'][:200] if response['content'] else 'None'}...")
                 return {
                     "response": response["content"],
                     "iterations": iteration,
                     "usage": response["usage"],
                     "tool_calls_summary": all_tool_calls,
                     "execution_log": execution_log,
-                    "system_prompt_used": True,  # Confirm system prompt was sent
+                    "system_prompt_used": True,
                 }
 
         # Max iterations reached
+        logger.warning(f"\n{'='*60}")
         logger.warning(f"Max iterations ({self.max_iterations}) reached")
         return {
             "response": "Max iterations reached",
@@ -140,21 +168,26 @@ class Agent:
     def _execute_tool(self, tool_call: Any) -> Dict[str, Any]:
         """
         Execute a single tool call with security validation.
-
-        Args:
-            tool_call: Tool call object from LLM response
-
-        Returns:
-            Dictionary with execution result
         """
         function_name = tool_call.function.name
-        arguments = json.loads(tool_call.function.arguments)
+        arguments_str = tool_call.function.arguments
+        
+        logger.info(f"    - Parsing arguments: {arguments_str[:100]}...")
+        
+        try:
+            arguments = json.loads(arguments_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"    - Failed to parse arguments: {e}")
+            return {"success": False, "error": f"Invalid JSON arguments: {str(e)}"}
 
         try:
             if function_name == "execute_bash":
-                command = arguments["command"]
-                logger.info(f"Executing bash command: {command}")
+                command = arguments.get("command", "")
+                logger.info(f"    - Executing bash command: {command}")
                 stdout, stderr, returncode = self.executor.execute_bash(command)
+                logger.info(f"    - Command return code: {returncode}")
+                logger.info(f"    - Stdout: {stdout[:100] if stdout else 'empty'}...")
+                logger.info(f"    - Stderr: {stderr[:100] if stderr else 'empty'}...")
                 return {
                     "success": returncode == 0,
                     "command": command,
@@ -164,12 +197,15 @@ class Agent:
                 }
 
             elif function_name == "execute_python":
-                code = arguments["code"]
-                logger.info(f"Executing Python code: {code[:100]}...")
+                code = arguments.get("code", "")
+                logger.info(f"    - Executing Python code: {code[:100]}...")
                 stdout, stderr = self.executor.execute_python(code)
+                logger.info(f"    - Python stdout: {stdout[:100] if stdout else 'empty'}...")
+                logger.info(f"    - Python stderr: {stderr[:100] if stderr else 'empty'}...")
                 return {"success": not stderr, "code": code, "stdout": stdout, "stderr": stderr}
 
             else:
+                logger.error(f"    - Unknown function: {function_name}")
                 return {"success": False, "error": f"Unknown function: {function_name}"}
 
         except CommandSecurityError:
@@ -177,4 +213,5 @@ class Agent:
             raise
 
         except Exception as e:
+            logger.exception(f"    - Execution error: {e}")
             return {"success": False, "error": str(e)}
