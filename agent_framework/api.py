@@ -5,6 +5,7 @@ from .agent import Agent
 from .config import settings
 import uuid
 import time
+import json
 
 
 class ChatRequest(BaseModel):
@@ -35,6 +36,61 @@ app = FastAPI(
 )
 
 
+def _serialize_logs(logs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert logs to JSON-serializable format."""
+    serialized = []
+    for log in logs:
+        clean_log = {}
+        for key, value in log.items():
+            if key == "response":
+                # Handle LLM response dict
+                clean_log[key] = {
+                    "content": value.get("content"),
+                    "tool_calls": (
+                        [
+                            {
+                                "id": tc.id if hasattr(tc, "id") else tc.get("id"),
+                                "function": {
+                                    "name": tc.function.name
+                                    if hasattr(tc, "function")
+                                    else tc.get("function", {}).get("name"),
+                                    "arguments": tc.function.arguments
+                                    if hasattr(tc, "function")
+                                    else tc.get("function", {}).get("arguments"),
+                                }
+                                if hasattr(tc, "function")
+                                else tc.get("function"),
+                            }
+                            for tc in value.get("tool_calls", []) or []
+                        ]
+                        if value.get("tool_calls")
+                        else None
+                    ),
+                    "finish_reason": value.get("finish_reason"),
+                    "usage": value.get("usage", {}),
+                }
+            elif key == "tool_call":
+                # Handle tool call dict
+                clean_log[key] = {
+                    "id": value.get("id"),
+                    "name": value.get("name"),
+                    "arguments": value.get("arguments"),
+                }
+            elif key == "result":
+                # Handle tool result dict
+                clean_log[key] = {
+                    "success": value.get("success"),
+                    "stdout": value.get("stdout"),
+                    "stderr": value.get("stderr"),
+                    "returncode": value.get("returncode"),
+                    "error": value.get("error"),
+                }
+            else:
+                clean_log[key] = value
+        serialized.append(clean_log)
+    return serialized
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     """
@@ -58,10 +114,13 @@ async def chat(request: ChatRequest) -> ChatResponse:
         agent = Agent(max_iterations=request.max_iterations)
         result = agent.run(request.message)
 
+        # Serialize logs to ensure JSON compatibility
+        serialized_logs = _serialize_logs(result["logs"])
+
         return ChatResponse(
             id=session_id,
-            response=result["response"],
-            logs=result["logs"],
+            response=result["response"] or "",
+            logs=serialized_logs,
             usage=result.get("usage", {}),
             iterations=result["iterations"],
             processing_time=time.time() - start_time,
