@@ -1,17 +1,18 @@
 from typing import List, Dict, Any, Optional
 from .llm_client import LLMClient
-from .tools.executor import ToolExecutor
+from .tools.executor import ToolExecutor, CommandSecurityError
 from .tools.schemas import get_tool_schemas
+from .prompts import get_system_message
 from .config import settings
 import json
 
 
 class Agent:
-    """Agent with tool calling capabilities."""
+    """Agent with tool calling capabilities and strict security policies."""
 
     def __init__(self, max_iterations: int = 10):
         """
-        Initialize agent.
+        Initialize agent with security-first approach.
 
         Args:
             max_iterations: Maximum tool calling iterations before giving up
@@ -20,6 +21,7 @@ class Agent:
         self.executor = ToolExecutor(settings.max_execution_time)
         self.tool_schemas = get_tool_schemas()
         self.max_iterations = max_iterations
+        self.system_message = get_system_message()
 
     def run(self, user_message: str) -> Dict[str, Any]:
         """
@@ -36,7 +38,8 @@ class Agent:
                 - iterations: Number of iterations completed
                 - error: Error message if any (optional)
         """
-        messages = [{"role": "user", "content": user_message}]
+        # Start with system message for security context
+        messages = [self.system_message, {"role": "user", "content": user_message}]
         logs = []
         iteration = 0
 
@@ -53,7 +56,16 @@ class Agent:
             # Check for tool calls
             if response["tool_calls"]:
                 for tool_call in response["tool_calls"]:
-                    result = self._execute_tool(tool_call)
+                    try:
+                        result = self._execute_tool(tool_call)
+                    except CommandSecurityError as e:
+                        # Security violation - don't execute, return error
+                        result = {
+                            "success": False,
+                            "security_violation": True,
+                            "error": str(e),
+                        }
+
                     logs.append(
                         {
                             "iteration": iteration,
@@ -97,7 +109,7 @@ class Agent:
 
     def _execute_tool(self, tool_call: Any) -> Dict[str, Any]:
         """
-        Execute a single tool call.
+        Execute a single tool call with security validation.
 
         Args:
             tool_call: Tool call object from LLM response
@@ -126,6 +138,10 @@ class Agent:
 
             else:
                 return {"success": False, "error": f"Unknown function: {function_name}"}
+
+        except CommandSecurityError:
+            # Re-raise security errors to be handled by run()
+            raise
 
         except Exception as e:
             return {"success": False, "error": str(e)}
